@@ -1,0 +1,10 @@
+# Python
+*.npz
+__pycache__/
+*.pyc
+
+# Temp files
+tmpclaude-*
+*.tmp
+.DS_Store
+Thumbs.db

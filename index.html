@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MotionPNG Tuber - Browser</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>MotionPNG Tuber</h1>
+
+        <!-- データフォルダ選択 -->
+        <div class="section" id="setup-section">
+            <h2>1. データフォルダを選択</h2>
+            <p>口消し動画、mouth_track.json、口スプライトが入ったフォルダを選択してください。</p>
+            <input type="file" id="folder-input" webkitdirectory multiple>
+            <div id="file-status"></div>
+        </div>
+
+        <!-- マイク設定 -->
+        <div class="section" id="mic-section" style="display: none;">
+            <h2>2. マイク設定</h2>
+            <select id="mic-select"></select>
+            <button id="mic-start-btn">マイクを開始</button>
+            <button id="mic-stop-btn" disabled>マイク停止</button>
+            <div class="meter-container">
+                <div id="volume-meter"></div>
+            </div>
+            <div>
+                <label>感度: <input type="range" id="sensitivity" min="0" max="100" value="50"></label>
+                <span id="sensitivity-value">50</span>
+            </div>
+        </div>
+
+        <!-- プレビュー -->
+        <div class="section" id="preview-section" style="display: none;">
+            <h2>3. プレビュー</h2>
+            <div class="stage-container">
+                <div class="stage" id="stage">
+                    <video id="base-video" playsinline muted></video>
+                    <canvas id="mouth-canvas"></canvas>
+                </div>
+            </div>
+            <div class="controls">
+                <button id="start-btn">開始</button>
+                <button id="stop-btn" disabled>停止</button>
+            </div>
+            <div id="debug-info" style="margin-top:10px; font-size:12px; color:#888;"></div>
+        </div>
+    </div>
+
+    <script src="lipsync.js"></script>
+</body>
+</html>
