@@ -3,9 +3,10 @@
 更新日: 2026-01-15
 
 更新情報:
-- HQ Audio（キビキビ）をデフォルトONに変更
-- HQ Audioの音声解析を改善（ノイズゲート/感度反映/反応速度）
-- 感度スライダーに説明を追加
+- **LipsyncEngineのリファクタリング** - DOM分離・Audio分離により他アプリへの組み込みが容易に
+- **AudioCaptureクラス追加** - マイク入力処理を独立したクラスに分離
+- **HTTPパスでのアセット読み込み対応** - サーバーからアセットを直接読み込み可能
+- **外部音声入力対応** - TTS等マイク以外の音声ソースにも対応
 
 > **[MotionPNGTuber](https://github.com/rotejin/MotionPNGTuber)** のブラウザ版再生専用パッケージ
 
@@ -166,9 +167,109 @@ AudioWorklet で音声解析
 ```
 MotionPNGTuber_Player/
 ├── index.html          # メインHTML
-├── lipsync.js          # リップシンクエンジン
+├── lipsync.js          # リップシンクエンジン（LipsyncEngineクラス）
+├── audio-capture.js    # マイク入力処理（AudioCaptureクラス）
 ├── audio-worklet.js    # 音声解析ワークレット
 ├── style.css           # スタイルシート
 ├── README.md           # このファイル
 └── assets/             # サンプルアセット
 ```
+
+---
+
+## 開発者向け: API リファレンス
+
+LipsyncEngineは他のWebアプリケーションに組み込んで使用できます。
+
+### 基本的な使い方（フォルダ選択）
+
+```javascript
+// DOM要素を準備
+const video = document.getElementById('base-video');
+const mouthCanvas = document.getElementById('mouth-canvas');
+const stage = document.getElementById('stage');
+
+// LipsyncEngine初期化
+const engine = new LipsyncEngine({
+    elements: { video, mouthCanvas, stage },
+    callbacks: {
+        onLog: (msg) => console.log(msg),
+        onFileStatus: (status, message) => { /* 'success' or 'error' */ },
+        onVolumeChange: (volume) => { /* 0-1 */ },
+        onPlayStateChange: (isPlaying) => { /* true/false */ },
+        onSectionsVisibility: (visible) => { /* true/false */ },
+        onError: (message) => alert(message)
+    }
+});
+
+// ファイル読み込み（フォルダ選択から）
+engine.loadFiles(Array.from(inputElement.files));
+
+// AudioCapture初期化（マイク入力）
+const audioCapture = new AudioCapture({
+    onVolumeData: (data) => engine.processAudioData(data),
+    onStateChange: (isRunning) => { /* true/false */ },
+    onDevicesLoaded: (devices) => { /* デバイス一覧 */ },
+    onError: (message) => alert(message)
+});
+
+audioCapture.loadDevices();
+audioCapture.start(deviceId);  // マイク開始
+engine.start();                // 再生開始
+```
+
+### HTTPパスでアセット指定（自動読み込み・自動開始）
+
+```javascript
+const engine = new LipsyncEngine({
+    elements: { video, mouthCanvas, stage },
+    assets: {
+        video: './assets/character/mouthless_h264.mp4',
+        track: './assets/character/mouth_track.json',
+        mouth_closed: './assets/character/mouth/closed.png',
+        mouth_open: './assets/character/mouth/open.png',
+        mouth_half: './assets/character/mouth/half.png',  // 任意
+        mouth_e: './assets/character/mouth/e.png',        // 任意
+        mouth_u: './assets/character/mouth/u.png'         // 任意
+    },
+    options: {
+        debug: true,           // デバッグログ出力
+        hqAudioEnabled: true,  // 高品質音声モード
+        sensitivity: 50        // 感度（0-100）
+    }
+});
+```
+
+### 外部音声データ入力（TTS連携等）
+
+```javascript
+// マイクを使わず、外部から音声データを入力
+engine.processAudioData({
+    rms: 0.15,   // 音量（RMS値）
+    high: 0.08,  // 高周波成分
+    low: 0.12    // 低周波成分
+});
+```
+
+### API一覧
+
+| メソッド | 説明 |
+|---------|------|
+| `loadFiles(files)` | File配列からアセットを読み込み |
+| `start()` | 再生開始 |
+| `stop()` | 再生停止 |
+| `processAudioData(data)` | 外部から音声データを入力 |
+| `setSensitivity(value)` | 感度設定（0-100） |
+| `setHQAudioEnabled(enabled)` | HQ Audioモード切替 |
+| `resetAudioStats()` | 音声統計値をリセット |
+| `cleanup()` | リソース解放 |
+
+### AudioCapture API
+
+| メソッド | 説明 |
+|---------|------|
+| `loadDevices()` | マイクデバイス一覧を取得 |
+| `start(deviceId)` | マイク入力開始 |
+| `stop()` | マイク入力停止 |
+| `setHQAudioEnabled(enabled)` | HQ Audioモード切替 |
+| `isRunning()` | 動作中かどうか |
