@@ -273,3 +273,11 @@ engine.processAudioData({
 | `stop()` | マイク入力停止 |
 | `setHQAudioEnabled(enabled)` | HQ Audioモード切替 |
 | `isRunning()` | 動作中かどうか |
+
+---
+
+## ライセンス
+
+[MIT License](LICENSE)
+
+Copyright (c) 2026 rotejin
