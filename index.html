@@ -55,6 +55,147 @@
         </div>
     </div>
 
+    <script src="audio-capture.js"></script>
     <script src="lipsync.js"></script>
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        // ========================================
+        // DOM要素 - LipsyncEngine用
+        // ========================================
+        const folderInput = document.getElementById('folder-input');
+        const fileStatus = document.getElementById('file-status');
+        const volumeMeter = document.getElementById('volume-meter');
+        const sensitivitySlider = document.getElementById('sensitivity');
+        const sensitivityValue = document.getElementById('sensitivity-value');
+        const hqAudioToggle = document.getElementById('hq-audio');
+        const startBtn = document.getElementById('start-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const debugInfo = document.getElementById('debug-info');
+        const micSection = document.getElementById('mic-section');
+        const previewSection = document.getElementById('preview-section');
+
+        // ========================================
+        // DOM要素 - AudioCapture用
+        // ========================================
+        const micSelect = document.getElementById('mic-select');
+        const micStartBtn = document.getElementById('mic-start-btn');
+        const micStopBtn = document.getElementById('mic-stop-btn');
+
+        // ========================================
+        // LipsyncEngine初期化
+        // ========================================
+        const engine = new LipsyncEngine({
+            elements: {
+                video: document.getElementById('base-video'),
+                mouthCanvas: document.getElementById('mouth-canvas'),
+                stage: document.getElementById('stage')
+            },
+            callbacks: {
+                onLog: (msg) => {
+                    debugInfo.textContent = msg;
+                },
+                onFileStatus: (status, message) => {
+                    fileStatus.className = status;
+                    fileStatus.textContent = message;
+                },
+                onVolumeChange: (volume) => {
+                    volumeMeter.style.width = `${volume * 100}%`;
+                },
+                onPlayStateChange: (isPlaying) => {
+                    startBtn.disabled = isPlaying;
+                    stopBtn.disabled = !isPlaying;
+                },
+                onSectionsVisibility: (visible) => {
+                    micSection.style.display = visible ? 'block' : 'none';
+                    previewSection.style.display = visible ? 'block' : 'none';
+                },
+                onError: (message) => {
+                    alert(message);
+                }
+            },
+            // Uncomment below to load character on start
+            // assets: {
+            //     video: './assets/assets14/pinkchan_mouthless_h264.mp4',
+            //     track: './assets/assets14/mouth_track.json',
+            //     mouth_closed: './assets/assets14/mouth/closed.png',
+            //     mouth_open: './assets/assets14/mouth/open.png',
+            //     mouth_half: './assets/assets14/mouth/half.png',
+            //     mouth_e: './assets/assets14/mouth/e.png',
+            //     mouth_u: './assets/assets14/mouth/u.png'
+            // },
+            // options: {
+            //     debug: true,           // デバッグログを表示
+            //     hqAudioEnabled: true,  // 高品質音声モード（キビキビ動作）
+            //     sensitivity: 50        // 感度（0-100、低いほど口が開きにくい）
+            // }
+        });
+
+        // ========================================
+        // AudioCapture初期化
+        // ========================================
+        const audioCapture = new AudioCapture({
+            onVolumeData: (data) => {
+                engine.processAudioData(data);
+            },
+            onStateChange: (isRunning) => {
+                micStartBtn.disabled = isRunning;
+                micStopBtn.disabled = !isRunning;
+                micStartBtn.textContent = isRunning ? 'マイク接続中' : 'マイクを開始';
+                if (!isRunning) {
+                    engine.resetAudioStats();
+                }
+            },
+            onDevicesLoaded: (devices) => {
+                micSelect.innerHTML = '';
+                devices.forEach((device) => {
+                    const option = document.createElement('option');
+                    option.value = device.deviceId;
+                    option.textContent = device.label;
+                    micSelect.appendChild(option);
+                });
+            },
+            onError: (message) => {
+                alert(message);
+            }
+        });
+
+        audioCapture.loadDevices();
+
+        // ========================================
+        // イベントリスナー - LipsyncEngine用
+        // ========================================
+        folderInput.addEventListener('change', (e) => {
+            engine.loadFiles(Array.from(e.target.files));
+        });
+        sensitivitySlider.addEventListener('input', (e) => {
+            const value = parseInt(e.target.value, 10);
+            engine.setSensitivity(value);
+            sensitivityValue.textContent = value;
+        });
+        hqAudioToggle.addEventListener('change', (e) => {
+            engine.setHQAudioEnabled(e.target.checked);
+            audioCapture.setHQAudioEnabled(e.target.checked);
+        });
+        startBtn.addEventListener('click', () => engine.start());
+        stopBtn.addEventListener('click', () => engine.stop());
+
+        // ========================================
+        // イベントリスナー - AudioCapture用
+        // ========================================
+        micStartBtn.addEventListener('click', () => {
+            audioCapture.start(micSelect.value);
+        });
+        micStopBtn.addEventListener('click', () => {
+            audioCapture.stop();
+        });
+
+        // ========================================
+        // 初期値設定
+        // ========================================
+        engine.setSensitivity(parseInt(sensitivitySlider.value, 10));
+        engine.setHQAudioEnabled(hqAudioToggle.checked);
+        audioCapture.setHQAudioEnabled(hqAudioToggle.checked);
+    });
+    </script>
 </body>
 </html>

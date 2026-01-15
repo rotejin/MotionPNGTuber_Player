@@ -2,28 +2,49 @@
  * MotionPNG Tuber - Browser Lipsync Engine (DOM overlay)
  */
 class LipsyncEngine {
-    constructor() {
-        // DOM要素
-        this.folderInput = document.getElementById('folder-input');
-        this.fileStatus = document.getElementById('file-status');
-        this.micSelect = document.getElementById('mic-select');
-        this.micStartBtn = document.getElementById('mic-start-btn');
-        this.micStopBtn = document.getElementById('mic-stop-btn');
-        this.volumeMeter = document.getElementById('volume-meter');
-        this.sensitivitySlider = document.getElementById('sensitivity');
-        this.sensitivityValue = document.getElementById('sensitivity-value');
-        this.hqAudioToggle = document.getElementById('hq-audio');
-        this.stage = document.getElementById('stage');
-        this.video = document.getElementById('base-video');
-        this.mouthCanvas = document.getElementById('mouth-canvas');
+    /**
+     * @param {Object} config - 設定オブジェクト
+     * @param {Object} config.elements - 必須DOM要素
+     * @param {HTMLVideoElement} config.elements.video - 動画要素
+     * @param {HTMLCanvasElement} config.elements.mouthCanvas - 口スプライト描画用Canvas
+     * @param {HTMLElement} config.elements.stage - ステージ要素（リサイズ監視用）
+     * @param {Object} config.callbacks - UI更新用コールバック（オプション）
+     * @param {Function} config.callbacks.onLog - ログ出力時
+     * @param {Function} config.callbacks.onFileStatus - ファイル状態変更時 (status: 'success'|'error', message: string)
+     * @param {Function} config.callbacks.onVolumeChange - 音量変化時 (volume: number 0-1)
+     * @param {Function} config.callbacks.onPlayStateChange - 再生状態変更時 (isPlaying: boolean)
+     * @param {Function} config.callbacks.onSectionsVisibility - セクション表示変更時 (visible: boolean)
+     * @param {Function} config.callbacks.onError - エラー発生時 (message: string)
+     * @param {Object} config.assets - HTTPパスでアセットを指定（オプション）
+     * @param {string} config.assets.video - 動画のHTTPパス
+     * @param {string} config.assets.track - mouth_track.jsonのHTTPパス
+     * @param {string} config.assets.mouth_closed - closed.pngのHTTPパス（必須）
+     * @param {string} config.assets.mouth_open - open.pngのHTTPパス（必須）
+     * @param {string} config.assets.mouth_half - half.pngのHTTPパス（オプション）
+     * @param {string} config.assets.mouth_e - e.pngのHTTPパス（オプション）
+     * @param {string} config.assets.mouth_u - u.pngのHTTPパス（オプション）
+     * @param {Object} config.options - オプション設定（オプション）
+     * @param {boolean} config.options.debug - デバッグログを出力するか（デフォルト: false）
+     * @param {boolean} config.options.hqAudioEnabled - HQ Audioモードを有効にするか（デフォルト: false）
+     * @param {number} config.options.sensitivity - 感度 0-100（デフォルト: 50）
+     */
+    constructor({ elements, callbacks = {}, assets = null, options = {} }) {
+        // 必須DOM要素
+        this.video = elements.video;
+        this.mouthCanvas = elements.mouthCanvas;
         this.mouthCtx = this.mouthCanvas.getContext('2d');
-        this.startBtn = document.getElementById('start-btn');
-        this.stopBtn = document.getElementById('stop-btn');
-        this.debugInfo = document.getElementById('debug-info');
+        this.stage = elements.stage;
 
-        // セクション
-        this.micSection = document.getElementById('mic-section');
-        this.previewSection = document.getElementById('preview-section');
+        // コールバック
+        this.callbacks = callbacks;
+
+        // オプション設定
+        const {
+            debug = true,
+            hqAudioEnabled = false,
+            sensitivity = 50
+        } = options;
+        this.debug = debug;
 
         // データ
         this.trackData = null;
@@ -33,19 +54,15 @@ class LipsyncEngine {
         this.videoUrl = null;
         this.isRunning = false;
 
-        // 音声関連
-        this.audioContext = null;
-        this.micStream = null;
-        this.workletNode = null;
-        this.gainNode = null;
+        // 音量解析用（AudioCaptureから受け取ったデータを処理）
         this.volume = 0;
         this.smoothedHighRatio = 0;
-        this.sensitivity = 50;
-        this.hqAudioEnabled = false;
+        this.sensitivity = sensitivity;
+        this.hqAudioEnabled = hqAudioEnabled;
         this.envelope = 0;
         this.noiseFloor = 0.002;
         this.levelPeak = 0.02;
-        this.mouthChangeMinMs = 70;
+        this.mouthChangeMinMs = hqAudioEnabled ? 45 : 70;
 
         // 口状態
         this.mouthState = 'closed';
@@ -58,32 +75,14 @@ class LipsyncEngine {
         this.statusInterval = null;
 
         this.init();
+
+        // assetsが指定されていたらHTTPから読み込み
+        if (assets) {
+            this._loadFromAssets(assets);
+        }
     }
 
     init() {
-        this.folderInput.addEventListener('change', (e) => this.handleFolderSelect(e));
-        this.micStartBtn.addEventListener('click', () => this.startMicrophone());
-        this.micStopBtn.addEventListener('click', () => this.stopMicrophone());
-        this.micStopBtn.disabled = true;
-        this.sensitivitySlider.addEventListener('input', (e) => {
-            this.sensitivity = parseInt(e.target.value, 10);
-            this.sensitivityValue.textContent = this.sensitivity;
-        });
-        if (this.hqAudioToggle) {
-            this.hqAudioEnabled = this.hqAudioToggle.checked;
-            this.mouthChangeMinMs = this.hqAudioEnabled ? 45 : 70;
-            this.hqAudioToggle.addEventListener('change', (e) => {
-                this.hqAudioEnabled = e.target.checked;
-                this.mouthChangeMinMs = this.hqAudioEnabled ? 45 : 70;
-                this.resetAudioStats();
-                this.log(this.hqAudioEnabled ? 'HQ Audio: ON' : 'HQ Audio: OFF');
-            });
-        }
-        this.startBtn.addEventListener('click', () => this.start());
-        this.stopBtn.addEventListener('click', () => this.stop());
-
-        this.loadMicDevices();
-
         window.addEventListener('resize', () => this.handleResize());
         window.addEventListener('beforeunload', () => this.cleanup());
         if ('ResizeObserver' in window) {
@@ -93,35 +92,26 @@ class LipsyncEngine {
         }
     }
 
+    // 外部から呼び出すAPI
+    setSensitivity(value) {
+        this.sensitivity = value;
+    }
+
+    setHQAudioEnabled(enabled) {
+        this.hqAudioEnabled = enabled;
+        this.mouthChangeMinMs = enabled ? 45 : 70;
+        this.resetAudioStats();
+        this.log(enabled ? 'HQ Audio: ON' : 'HQ Audio: OFF');
+    }
+
     log(msg) {
-        console.log(msg);
-        if (this.debugInfo) {
-            this.debugInfo.textContent = msg;
+        if (this.debug) {
+            console.log(msg);
+            this.callbacks.onLog?.(msg);
         }
     }
 
-    async loadMicDevices() {
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            stream.getTracks().forEach((t) => t.stop());
-
-            const devices = await navigator.mediaDevices.enumerateDevices();
-            const audioInputs = devices.filter((d) => d.kind === 'audioinput');
-
-            this.micSelect.innerHTML = '';
-            audioInputs.forEach((device, i) => {
-                const option = document.createElement('option');
-                option.value = device.deviceId;
-                option.textContent = device.label || `マイク ${i + 1}`;
-                this.micSelect.appendChild(option);
-            });
-        } catch (err) {
-            console.error('マイクアクセスエラー:', err);
-        }
-    }
-
-    async handleFolderSelect(event) {
-        const files = Array.from(event.target.files);
+    async loadFiles(files) {
         this.log('ファイル数: ' + files.length);
 
         let videoFile = null;
@@ -141,7 +131,7 @@ class LipsyncEngine {
             if (name === 'mouth_track.json') {
                 trackFile = file;
             }
-            if (path.includes('/mouth/') || path.includes('\\mouth\\')) {
+            if (path.includes('mouth/') || path.includes('mouth\\')) {
                 if (name === 'closed.png') spriteFiles.closed = file;
                 if (name === 'open.png') spriteFiles.open = file;
                 if (name === 'half.png') spriteFiles.half = file;
@@ -157,76 +147,156 @@ class LipsyncEngine {
         if (!spriteFiles.open) missing.push('mouth/open.png');
 
         if (missing.length > 0) {
-            this.fileStatus.className = 'error';
-            this.fileStatus.textContent = `不足: ${missing.join(', ')}`;
+            this.callbacks.onFileStatus?.('error', `不足: ${missing.join(', ')}`);
             return;
         }
 
         try {
             this.cleanup();
-            this.log('動画読み込み中...');
 
-            this.videoUrl = URL.createObjectURL(videoFile);
-            this.video.src = this.videoUrl;
-            this.video.loop = true;
-            this.video.muted = true;
-            this.video.playsInline = true;
-            this.video.preload = 'auto';
-            this.video.controls = false;
+            // 動画読み込み（File → ObjectURL）
+            const videoSrc = URL.createObjectURL(videoFile);
+            await this._setupVideo(videoSrc, true);
 
-            await new Promise((resolve, reject) => {
-                const onReady = () => {
-                    this.log(
-                        '動画準備完了: ' +
-                            this.video.videoWidth +
-                            'x' +
-                            this.video.videoHeight
-                    );
-                    this.video.removeEventListener('canplaythrough', onReady);
-                    this.video.removeEventListener('loadeddata', onReady);
-                    resolve();
-                };
-                this.video.addEventListener('canplaythrough', onReady);
-                this.video.addEventListener('loadeddata', onReady);
-                this.video.onerror = (e) => {
-                    this.log('動画エラー: ' + e.message);
-                    reject(new Error('動画の読み込みに失敗'));
-                };
-                this.video.load();
-            });
-
-            this.mouthCanvas.width = this.video.videoWidth || 1;
-            this.mouthCanvas.height = this.video.videoHeight || 1;
-            if (this.mouthCtx) {
-                this.mouthCtx.setTransform(1, 0, 0, 1, 0, 0);
-                this.mouthCtx.imageSmoothingEnabled = true;
-                this.mouthCtx.clearRect(0, 0, this.mouthCanvas.width, this.mouthCanvas.height);
-            }
-
+            // トラックデータ読み込み
             const trackText = await trackFile.text();
-            this.trackData = JSON.parse(trackText);
-            this.log('トラッキング: ' + this.trackData.frames.length + 'フレーム');
+            await this._setupTrackData(JSON.parse(trackText));
 
-            this.mouthSprites = {};
-            this.mouthSpriteUrls = {};
+            // スプライト読み込み（File → ObjectURL）
+            const spriteSources = {};
             for (const [key, file] of Object.entries(spriteFiles)) {
-                const img = await this.loadImage(file);
-                this.mouthSprites[key] = img;
-                this.mouthSpriteUrls[key] = img.src;
+                spriteSources[key] = URL.createObjectURL(file);
             }
+            await this._loadMouthSprites(spriteSources);
 
-            this.fileStatus.className = 'success';
-            this.fileStatus.textContent = `読み込み完了: ${this.trackData.frames.length}フレーム, ${this.trackData.fps}fps (${this.video.videoWidth}x${this.video.videoHeight})`;
-
-            this.micSection.style.display = 'block';
-            this.previewSection.style.display = 'block';
-
-            this.setMouthState('closed', true);
-            this.renderPreview();
+            this._onLoadComplete();
         } catch (err) {
-            this.fileStatus.className = 'error';
-            this.fileStatus.textContent = `読み込みエラー: ${err.message}`;
+            this.callbacks.onFileStatus?.('error', `読み込みエラー: ${err.message}`);
             console.error(err);
+        }
+    }
+
+    async _loadFromAssets(assets) {
+        const missing = [];
+        if (!assets.video) missing.push('video');
+        if (!assets.track) missing.push('track');
+        if (!assets.mouth_closed) missing.push('mouth_closed');
+        if (!assets.mouth_open) missing.push('mouth_open');
+
+        if (missing.length > 0) {
+            this.callbacks.onFileStatus?.('error', `assets不足: ${missing.join(', ')}`);
+            return;
+        }
+
+        try {
+            this.cleanup();
+
+            // 動画読み込み（HTTPパス）
+            await this._setupVideo(assets.video, false);
+
+            // トラックデータ読み込み（HTTP fetch）
+            this.log('トラックデータ読み込み中...');
+            const response = await fetch(assets.track);
+            if (!response.ok) throw new Error(`track fetch failed: ${response.status}`);
+            const trackData = await response.json();
+            await this._setupTrackData(trackData);
+
+            // スプライト読み込み（HTTPパス）
+            const spriteSources = {
+                closed: assets.mouth_closed,
+                open: assets.mouth_open
+            };
+            if (assets.mouth_half) spriteSources.half = assets.mouth_half;
+            if (assets.mouth_e) spriteSources.e = assets.mouth_e;
+            if (assets.mouth_u) spriteSources.u = assets.mouth_u;
+            await this._loadMouthSprites(spriteSources);
+
+            this._onLoadComplete(true);  // assets読み込み時は自動開始
+        } catch (err) {
+            this.callbacks.onFileStatus?.('error', `読み込みエラー: ${err.message}`);
+            console.error(err);
+        }
+    }
+
+    async _setupVideo(src, isObjectUrl) {
+        this.log('動画読み込み中...');
+
+        if (isObjectUrl) {
+            this.videoUrl = src;
+        }
+        this.video.src = src;
+        this.video.loop = true;
+        this.video.muted = true;
+        this.video.playsInline = true;
+        this.video.preload = 'auto';
+        this.video.controls = false;
+
+        await new Promise((resolve, reject) => {
+            const onReady = () => {
+                this.log(
+                    '動画準備完了: ' +
+                        this.video.videoWidth +
+                        'x' +
+                        this.video.videoHeight
+                );
+                this.video.removeEventListener('canplaythrough', onReady);
+                this.video.removeEventListener('loadeddata', onReady);
+                resolve();
+            };
+            this.video.addEventListener('canplaythrough', onReady);
+            this.video.addEventListener('loadeddata', onReady);
+            this.video.onerror = (e) => {
+                this.log('動画エラー: ' + (e.message || 'unknown'));
+                reject(new Error('動画の読み込みに失敗'));
+            };
+            this.video.load();
+        });
+
+        this.mouthCanvas.width = this.video.videoWidth || 1;
+        this.mouthCanvas.height = this.video.videoHeight || 1;
+        if (this.mouthCtx) {
+            this.mouthCtx.setTransform(1, 0, 0, 1, 0, 0);
+            this.mouthCtx.imageSmoothingEnabled = true;
+            this.mouthCtx.clearRect(0, 0, this.mouthCanvas.width, this.mouthCanvas.height);
+        }
+    }
+
+    async _setupTrackData(trackData) {
+        this.trackData = trackData;
+        this.log('トラッキング: ' + this.trackData.frames.length + 'フレーム');
+    }
+
+    async _loadMouthSprites(sources) {
+        this.mouthSprites = {};
+        this.mouthSpriteUrls = {};
+
+        for (const [key, src] of Object.entries(sources)) {
+            const img = await this._loadImageFromSrc(src);
+            this.mouthSprites[key] = img;
+            this.mouthSpriteUrls[key] = src;
+        }
+    }
+
+    _loadImageFromSrc(src) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => resolve(img);
+            img.onerror = () => reject(new Error(`画像読み込み失敗: ${src}`));
+            img.src = src;
+        });
+    }
+
+    _onLoadComplete(autoStart = false) {
+        const statusMsg = `読み込み完了: ${this.trackData.frames.length}フレーム, ${this.trackData.fps}fps (${this.video.videoWidth}x${this.video.videoHeight})`;
+        this.callbacks.onFileStatus?.('success', statusMsg);
+        this.callbacks.onSectionsVisibility?.(true);
+
+        this.setMouthState('closed', true);
+
+        if (autoStart) {
+            this.start();
+        } else {
+            this.renderPreview();
         }
     }
 
@@ -241,7 +311,6 @@ class LipsyncEngine {
 
     cleanup() {
         this.stop();
-        this.stopMicrophone();
         if (this.videoUrl) {
             URL.revokeObjectURL(this.videoUrl);
             this.videoUrl = null;
@@ -262,126 +331,12 @@ class LipsyncEngine {
         }
     }
 
-    async startMicrophone() {
-        if (this.micStream) return;
-
-        try {
-            const deviceId = this.micSelect.value;
-            const baseAudio = {};
-            if (deviceId) {
-                baseAudio.deviceId = { exact: deviceId };
-            }
-            let audioConstraints = { ...baseAudio };
-            if (this.hqAudioEnabled) {
-                audioConstraints.echoCancellation = false;
-                audioConstraints.noiseSuppression = false;
-                audioConstraints.autoGainControl = false;
-            }
-            try {
-                this.micStream = await navigator.mediaDevices.getUserMedia({
-                    audio: audioConstraints,
-                });
-            } catch (err) {
-                if (this.hqAudioEnabled) {
-                    console.warn(
-                        'HQ Audio constraints failed, fallback to default:',
-                        err
-                    );
-                    this.micStream = await navigator.mediaDevices.getUserMedia({
-                        audio: baseAudio,
-                    });
-                } else {
-                    throw err;
-                }
-            }
-
-            this.micStartBtn.textContent = 'マイク接続中';
-            this.micStartBtn.disabled = true;
-            this.micStopBtn.disabled = false;
-
-            this.resetAudioStats();
-            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            if (!this.audioContext.audioWorklet) {
-                throw new Error('AudioWorklet未対応のブラウザです');
-            }
-
-            await this.audioContext.audioWorklet.addModule('audio-worklet.js');
-            await this.audioContext.resume();
-
-            const source = this.audioContext.createMediaStreamSource(this.micStream);
-            this.workletNode = new AudioWorkletNode(this.audioContext, 'volume-analyzer');
-            this.workletNode.port.onmessage = (event) => this.handleAudioData(event.data);
-
-            this.gainNode = this.audioContext.createGain();
-            this.gainNode.gain.value = 0;
-
-            source.connect(this.workletNode);
-            this.workletNode.connect(this.gainNode).connect(this.audioContext.destination);
-
-        } catch (err) {
-            console.error('マイク開始エラー:', err);
-            this.stopMicrophone();
-            alert('マイクの開始に失敗しました: ' + err.message);
-        }
-    }
-
-    stopMicrophone() {
-        if (this.workletNode) {
-            try {
-                this.workletNode.port.onmessage = null;
-            } catch {
-                // ignore
-            }
-            try {
-                this.workletNode.disconnect();
-            } catch {
-                // ignore
-            }
-            this.workletNode = null;
-        }
-
-        if (this.gainNode) {
-            try {
-                this.gainNode.disconnect();
-            } catch {
-                // ignore
-            }
-            this.gainNode = null;
-        }
-
-        if (this.micStream) {
-            this.micStream.getTracks().forEach((t) => t.stop());
-            this.micStream = null;
-        }
-
-        if (this.audioContext) {
-            this.audioContext.close().catch(() => {});
-            this.audioContext = null;
-        }
-
-        this.resetAudioStats();
-
-        this.micStartBtn.textContent = 'マイクを開始';
-        this.micStartBtn.disabled = false;
-        this.micStopBtn.disabled = true;
-    }
-
-    resetAudioStats() {
-        this.volume = 0;
-        this.envelope = 0;
-        this.noiseFloor = 0.002;
-        this.levelPeak = 0.02;
-        this.smoothedHighRatio = 0;
-        if (this.volumeMeter) {
-            this.volumeMeter.style.width = '0%';
-        }
-    }
-
-    handleAudioData(data) {
+    // AudioCaptureからデータを受け取るメソッド
+    processAudioData(data) {
         if (!data) return;
 
         if (this.hqAudioEnabled) {
-            this.handleAudioDataHQ(data);
+            this.processAudioDataHQ(data);
             return;
         }
 
@@ -392,8 +347,8 @@ class LipsyncEngine {
             this.smoothedHighRatio * (1 - smoothing) + ratio * smoothing;
 
         const thresholds = this.getVolumeThresholds();
-        const meter = Math.min(100, (this.volume / (thresholds.half * 1.8)) * 100);
-        this.volumeMeter.style.width = meter + '%';
+        const meter = Math.min(1, this.volume / (thresholds.half * 1.8));
+        this.callbacks.onVolumeChange?.(meter);
 
         const nextState = this.selectMouthState(
             this.volume,
@@ -403,7 +358,16 @@ class LipsyncEngine {
         this.setMouthState(nextState);
     }
 
-    handleAudioDataHQ(data) {
+    resetAudioStats() {
+        this.volume = 0;
+        this.envelope = 0;
+        this.noiseFloor = 0.002;
+        this.levelPeak = 0.02;
+        this.smoothedHighRatio = 0;
+        this.callbacks.onVolumeChange?.(0);
+    }
+
+    processAudioDataHQ(data) {
         const ratio = data.high / (data.low + data.high + 1e-6);
         const ratioSmoothing = 0.25;
         this.smoothedHighRatio =
@@ -439,7 +403,7 @@ class LipsyncEngine {
         const gateLevel = this.noiseFloor + gateMargin;
         if (this.envelope < gateLevel) {
             this.volume = 0;
-            this.volumeMeter.style.width = '0%';
+            this.callbacks.onVolumeChange?.(0);
             this.setMouthState('closed');
             return;
         }
@@ -451,7 +415,7 @@ class LipsyncEngine {
         const shaped = Math.min(1, Math.pow(level, 0.75) * gain);
 
         this.volume = shaped;
-        this.volumeMeter.style.width = Math.min(100, shaped * 100) + '%';
+        this.callbacks.onVolumeChange?.(shaped);
 
         const thresholds = this.getVolumeThresholdsHQ();
         const nextState = this.selectMouthStateHQ(
@@ -568,13 +532,12 @@ class LipsyncEngine {
 
     async start() {
         if (!this.video || !this.trackData) {
-            alert('先にデータフォルダを選択してください');
+            this.callbacks.onError?.('先にデータフォルダを選択してください');
             return;
         }
 
         this.isRunning = true;
-        this.startBtn.disabled = true;
-        this.stopBtn.disabled = false;
+        this.callbacks.onPlayStateChange?.(true);
 
         try {
             this.log('動画再生開始...');
@@ -618,8 +581,7 @@ class LipsyncEngine {
 
     stop() {
         this.isRunning = false;
-        this.startBtn.disabled = false;
-        this.stopBtn.disabled = true;
+        this.callbacks.onPlayStateChange?.(false);
 
         if (this.video) {
             this.video.pause();
@@ -813,7 +775,3 @@ class LipsyncEngine {
         return { a, b, c, d, e, f };
     }
 }
-
-document.addEventListener('DOMContentLoaded', () => {
-    new LipsyncEngine();
-});
